@@ -109,8 +109,9 @@ def _live_groq_models(key):
     chat = [i for i in ids if not any(b in i.lower() for b in bad)]
     def rank(i):
         s = i.lower()
-        return (("llama-3.3" in s) * 8 + ("70b" in s) * 4 +
-                ("instant" in s) * 3 + ("llama" in s) * 2 + ("gemma" in s))
+        return (("versatile" in s) * 7 + ("instant" in s) * 6 +
+                ("maverick" in s or "scout" in s or "llama-4" in s) * 5 +
+                ("llama" in s) * 4 + ("gemma" in s) * 2 + ("oss" in s) * 1)
     return sorted(chat, key=rank, reverse=True)
 
 def sage_recommend(prob, band, contribs):
@@ -129,9 +130,16 @@ def sage_recommend(prob, band, contribs):
             try:
                 from groq import Groq
                 resp = Groq(api_key=key).chat.completions.create(
-                    model=mdl, temperature=0.3, max_tokens=70,
+                    model=mdl, temperature=0.3, max_tokens=900,
                     messages=[{"role": "user", "content": prompt}])
-                return resp.choices[0].message.content.strip(), f"LLM · Groq ({mdl})"
+                msg = resp.choices[0].message
+                text = (getattr(msg, "content", "") or "").strip()
+                if not text:
+                    text = (getattr(msg, "reasoning", "") or "").strip()
+                if text:
+                    return text, f"LLM · Groq ({mdl})"
+                last_err = "empty response from " + mdl
+                continue
             except Exception as e:
                 last_err = str(e)[:140]
                 continue
