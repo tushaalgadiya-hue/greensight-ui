@@ -1,0 +1,10 @@
+streamlit
+catboost
+shap
+scikit-learn
+imbalanced-learn
+pandas
+numpy
+plotly
+joblib
+ollama
