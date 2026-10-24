@@ -1,15 +1,18 @@
 """
 GreenSight — Streamlit UI
 =========================
-Enter the six features, click Run, and watch RISE -> SHINE -> SAGE work.
+Enter the six features (or load an example), click Run, and watch
+RISE -> SHINE -> SAGE work, plus the SDG 12 carbon saving.
 
-RUN (from this folder, after train_and_save.py has been run once):
-    streamlit run app.py
-A browser tab opens at http://localhost:8501
+RUN LOCALLY (after train_and_save.py has been run once):
+    python -m streamlit run app.py
 
-SAGE uses a local LLM through Ollama. If Ollama is not running, the app
-still works and shows a clear rule-based recommendation instead.
+SAGE (the recommendation) uses an LLM. It picks the first that is available:
+  1) a hosted LLM (Groq) if a GROQ_API_KEY is set  -> works on the website
+  2) a local Ollama model if one is running         -> works on your laptop
+  3) a clear rule-based recommendation otherwise     -> always works
 """
+import os
 import json
 import joblib
 import numpy as np
@@ -20,8 +23,9 @@ from catboost import CatBoostClassifier
 import shap
 
 # ----------------------------------------------------------------- config
-OLLAMA_MODEL = "llama3.2"          # change to any model you have pulled
-CARBON_PER_RETURN = 2.4            # kg CO2 per prevented return
+OLLAMA_MODEL = "llama3.2"                 # used only when running on your laptop
+GROQ_MODEL   = "llama-3.1-8b-instant"     # used on the website (free, fast)
+CARBON_PER_RETURN = 2.4                   # kg CO2 per prevented return
 BAND_N = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
 COLORS = {"dark": "#0E3B2E", "green": "#2E8B6B", "blue": "#1C7293",
           "amber": "#E0A93B", "pos": "#2E8B6B", "neg": "#C0564B"}
@@ -38,9 +42,6 @@ st.markdown(f"""
 .gs-hero p {{margin:.25rem 0 0 0; opacity:.9; font-size:1.0rem;}}
 .gs-step {{display:inline-block; padding:6px 14px; border-radius:999px; font-weight:700;
   font-size:.85rem; color:white; margin-right:8px;}}
-.gs-card {{border:1px solid #E6EBE8; border-radius:16px; padding:18px 20px; background:white;
-  box-shadow:0 1px 3px rgba(0,0,0,.05); height:100%;}}
-.gs-card h3 {{margin:0 0 2px 0; font-size:1.15rem;}}
 .gs-tag {{font-size:.78rem; font-weight:700; letter-spacing:.3px; text-transform:uppercase; opacity:.7;}}
 .gs-band {{display:inline-block; padding:8px 18px; border-radius:12px; font-size:1.5rem;
   font-weight:800; color:white;}}
@@ -65,7 +66,12 @@ def load_artifacts():
         metrics = {}
     return model, month_map, features, explainer, metrics
 
-model, MONTH_MAP, FEATURES, EXPLAINER, METRICS = load_artifacts()
+try:
+    model, MONTH_MAP, FEATURES, EXPLAINER, METRICS = load_artifacts()
+except Exception as e:
+    st.error("Could not load the model. Make sure the 'models' folder is present "
+             "(run: python train_and_save.py). Details: %s" % e)
+    st.stop()
 
 # ----------------------------------------------------------------- helpers
 def rise_predict(row_values):
@@ -81,36 +87,58 @@ def shine_explain(X):
                       key=lambda t: abs(t[1]), reverse=True)
     return base, contribs
 
+def _get_groq_key():
+    try:
+        if "GROQ_API_KEY" in st.secrets:
+            return st.secrets["GROQ_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("GROQ_API_KEY")
+
+def _build_prompt(prob, band, contribs):
+    top = ", ".join(f for f, _ in contribs[:2])
+    return ("You are SAGE, a shop's assistant. "
+            f"A visitor's chance of buying is {prob*100:.0f}% ({band}). "
+            f"Main reasons: {top}. "
+            "Tell the shop ONE action to take, in ONE or TWO very short sentences. "
+            "Use simple everyday words a non-expert understands. Be direct and practical. "
+            "No jargon, no long explanation, no lists. "
+            "Do not suggest a discount if the visitor is already likely to buy.")
+
 def sage_recommend(prob, band, contribs):
-    top = contribs[:3]
-    drivers = ", ".join(f"{f} ({'+' if v >= 0 else ''}{v:.2f})" for f, v in top)
-    prompt = (
-        "You are SAGE, a sustainability-aware retail advisor. "
-        f"A browsing session has a purchase-intention probability of {prob:.3f} "
-        f"(band: {band}). The main drivers from SHAP are: {drivers}. "
-        "In 2-3 sentences, recommend ONE concrete action for the RETAILER that fits this band "
-        "(a strong action for HIGH, a light nudge for MEDIUM, a simple low-cost step for LOW). "
-        "Do not offer a discount to a session already likely to convert. "
-        "Give a short reason tied to the drivers. Write plainly, no lists."
-    )
+    prompt = _build_prompt(prob, band, contribs)
+    # 1) hosted LLM (works on the website)
+    key = _get_groq_key()
+    if key:
+        try:
+            from groq import Groq
+            client = Groq(api_key=key)
+            resp = client.chat.completions.create(
+                model=GROQ_MODEL, temperature=0.3, max_tokens=70,
+                messages=[{"role": "user", "content": prompt}])
+            return resp.choices[0].message.content.strip(), "LLM (Groq)"
+        except Exception:
+            pass
+    # 2) local Ollama (works on your laptop)
     try:
         import ollama
         resp = ollama.chat(model=OLLAMA_MODEL, messages=[{"role": "user", "content": prompt}])
-        return resp["message"]["content"].strip(), "LLM (Ollama)"
+        return resp["message"]["content"].strip(), "LLM (Ollama, local)"
     except Exception:
-        fallback = {
-            "HIGH": "This session is already very likely to convert, driven by strong page values and engagement. Rather than a discount, recommend complementary products and free shipping to grow the order value.",
-            "MEDIUM": "Intent is moderate. Offer a light, confidence-building nudge such as clear delivery information and free shipping rather than a discount, to tip the session towards a confident purchase.",
-            "LOW": "Intent is weak and the visit is short. Keep it simple and low cost: show clear product information and an easy checkout, and avoid spending on discounts here.",
-        }
-        return fallback[band], "rule-based fallback (Ollama not running)"
+        pass
+    # 3) always-available rule-based recommendation
+    fallback = {
+        "HIGH": "This shopper is very likely to buy. Don't give a discount. Show related products and offer free shipping to grow the order.",
+        "MEDIUM": "This shopper might buy. Give a small nudge like free shipping and clear delivery info. No discount needed.",
+        "LOW": "This shopper probably won't buy. Keep it simple and cheap: clear product info and an easy checkout. Don't spend on discounts.",
+    }
+    return fallback[band], "rule-based (no LLM connected)"
 
 def shap_figure(base, contribs):
     feats = [f for f, _ in contribs][::-1]
     vals = [v for _, v in contribs][::-1]
     bar_colors = [COLORS["pos"] if v >= 0 else COLORS["neg"] for v in vals]
-    fig = go.Figure(go.Bar(x=vals, y=feats, orientation="h",
-                           marker_color=bar_colors,
+    fig = go.Figure(go.Bar(x=vals, y=feats, orientation="h", marker_color=bar_colors,
                            text=[f"{v:+.2f}" for v in vals], textposition="outside"))
     fig.update_layout(height=300, margin=dict(l=10, r=30, t=10, b=10),
                       xaxis_title="push on the score  (green = towards purchase)",
@@ -139,16 +167,19 @@ if METRICS:
 st.subheader("Enter the six session features")
 
 presets = {
-    "— custom —": None,
-    "High-intent example": dict(TrafficType=2, Administrative_Duration=120.0, Month="Nov",
-                                ProductRelated=45, BounceRates=0.005, PageValues=38.0),
+    "— type my own —": None,
+    "High-intent example": dict(TrafficType=2, Administrative_Duration=180.0, Month="Nov",
+                                ProductRelated=90, BounceRates=0.0, PageValues=95.0),
     "Medium-intent example": dict(TrafficType=3, Administrative_Duration=40.0, Month="May",
-                                  ProductRelated=18, BounceRates=0.02, PageValues=8.0),
+                                  ProductRelated=18, BounceRates=0.02, PageValues=6.0),
     "Low-intent example": dict(TrafficType=1, Administrative_Duration=0.0, Month="Feb",
-                               ProductRelated=3, BounceRates=0.15, PageValues=0.0),
+                               ProductRelated=2, BounceRates=0.20, PageValues=0.0),
 }
-choice = st.selectbox("Load an example (or choose custom and type your own)", list(presets.keys()))
-p = presets[choice] or presets["Medium-intent example"]
+choice = st.selectbox("Load an example, or choose “type my own” to enter values",
+                      list(presets.keys()))
+p = presets[choice] or dict(TrafficType=2, Administrative_Duration=40.0, Month="May",
+                            ProductRelated=20, BounceRates=0.02, PageValues=10.0)
+months = list(MONTH_MAP.keys())
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -163,8 +194,8 @@ with c2:
                                 float(p["Administrative_Duration"]), 1.0,
                                 help="Seconds spent on account/admin pages.")
 with c3:
-    month = st.selectbox("Month", list(MONTH_MAP.keys()),
-                         index=list(MONTH_MAP.keys()).index(p["Month"]) if p["Month"] in MONTH_MAP else 0)
+    month = st.selectbox("Month", months,
+                         index=months.index(p["Month"]) if p["Month"] in months else 0)
     traffic = st.number_input("TrafficType", 1, 20, int(p["TrafficType"]), 1,
                               help="How the visitor reached the site (coded 1–20).")
 
@@ -213,6 +244,6 @@ if run:
             st.markdown('<h3>Recommended action</h3>', unsafe_allow_html=True)
             st.markdown(f'<div class="gs-reco">{reco}</div>', unsafe_allow_html=True)
             st.metric("Estimated carbon saving (SDG 12)", f"{carbon:.1f} kg CO₂")
-            st.caption(f"Source: {source}")
+            st.caption(f"SAGE engine: {source}")
 
     st.success("RISE → SHINE → SAGE completed. Each module fed the next.")
