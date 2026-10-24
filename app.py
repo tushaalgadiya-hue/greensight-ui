@@ -21,46 +21,33 @@ from catboost import CatBoostClassifier
 import shap
 
 # ----------------------------------------------------------------- config
-GROQ_MODELS = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant",
-               "llama3-70b-8192", "llama3-8b-8192"]
 OLLAMA_MODEL = "llama3.2"
 CARBON_PER_RETURN = 2.4
 BAND_N = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
-INK = "#1C2420"; GREEN = "#1F6F54"; BLUE = "#2E6E8E"; AMBER = "#C98A2B"
-POS = "#2F8F6B"; NEG = "#C0564B"; MUTE = "#6B766F"; LINE = "#E3E7E2"
+COLORS = {"dark": "#0E3B2E", "green": "#2E8B6B", "blue": "#1C7293",
+          "amber": "#E0A93B", "pos": "#2E8B6B", "neg": "#C0564B"}
 
-st.set_page_config(page_title="GreenSight", page_icon="◆", layout="wide")
+st.set_page_config(page_title="GreenSight", page_icon="🌱", layout="wide")
 
 # ----------------------------------------------------------------- styling
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap');
-html, body, [class*="css"] {{ font-family: 'Inter', system-ui, sans-serif; }}
-.block-container {{ padding-top: 1.1rem; max-width: 1180px; }}
-header[data-testid="stHeader"] {{ background: transparent; }}
-
-.gs-head {{ display:flex; align-items:center; gap:16px; padding-bottom:14px;
-  border-bottom:1px solid {LINE}; margin-bottom:6px; }}
-.gs-mark {{ width:46px; height:46px; border-radius:11px; background:{GREEN};
-  color:white; font-weight:700; font-size:19px; display:flex; align-items:center;
-  justify-content:center; letter-spacing:.5px; flex:0 0 auto; }}
-.gs-name {{ font-family:'Fraunces', serif; font-weight:600; font-size:30px;
-  color:{INK}; line-height:1; }}
-.gs-sub {{ color:{MUTE}; font-size:13.5px; margin-top:4px; }}
-.gs-flow {{ color:{MUTE}; font-size:12.5px; letter-spacing:.4px; margin:10px 0 2px 0; }}
-.gs-flow b {{ color:{INK}; font-weight:600; }}
-
-.gs-mod {{ font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase; }}
-.gs-h {{ font-family:'Fraunces',serif; font-weight:600; font-size:20px; color:{INK};
-  margin:2px 0 10px 0; }}
-.gs-prob {{ font-family:'Fraunces',serif; font-size:46px; font-weight:600; color:{INK};
-  line-height:1; }}
-.gs-band {{ display:inline-block; padding:7px 16px; border-radius:9px; font-size:16px;
-  font-weight:700; color:white; letter-spacing:.5px; }}
-.gs-reco {{ font-size:15.5px; line-height:1.55; color:{INK}; }}
-.stButton>button {{ background:{GREEN}; color:white; font-weight:600; border:0;
-  border-radius:10px; padding:.55rem 1.4rem; font-size:1.0rem; }}
-.stButton>button:hover {{ background:#17563f; color:white; }}
+.block-container {{padding-top: 1.4rem; max-width: 1200px;}}
+.gs-hero {{background: linear-gradient(135deg,{COLORS['dark']} 0%,{COLORS['green']} 100%);
+  padding: 22px 28px; border-radius: 16px; color: white; margin-bottom: 6px;}}
+.gs-hero h1 {{margin:0; font-size: 2.0rem; font-weight: 800; letter-spacing:.2px;}}
+.gs-hero p {{margin:.25rem 0 0 0; opacity:.9; font-size:1.0rem;}}
+.gs-step {{display:inline-block; padding:6px 14px; border-radius:999px; font-weight:700;
+  font-size:.85rem; color:white; margin-right:8px;}}
+.gs-tag {{font-size:.78rem; font-weight:700; letter-spacing:.3px; text-transform:uppercase; opacity:.7;}}
+.gs-h {{font-size:1.15rem; font-weight:700; margin:2px 0 8px 0;}}
+.gs-band {{display:inline-block; padding:8px 18px; border-radius:12px; font-size:1.5rem;
+  font-weight:800; color:white;}}
+.gs-reco {{background:#FBF7EC; border:1px solid #EAD9AD; border-radius:12px; padding:16px 18px;
+  font-size:1.02rem; line-height:1.5; color:#3a3326;}}
+.stButton>button {{background:{COLORS['green']}; color:white; font-weight:700; border:0;
+  border-radius:12px; padding:.6rem 1.2rem; font-size:1.05rem;}}
+.stButton>button:hover {{background:{COLORS['dark']}; color:white;}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -110,31 +97,45 @@ def _prompt(prob, band, contribs):
             "non-expert understands. Be direct. No jargon, no lists, no long explanation. "
             "Do not suggest a discount if the visitor is already likely to buy.")
 
+@st.cache_data(show_spinner=False)
+def _live_groq_models(key):
+    """Ask Groq which chat models exist right now, best first."""
+    try:
+        from groq import Groq
+        ids = [m.id for m in Groq(api_key=key).models.list().data]
+    except Exception:
+        return []
+    bad = ("whisper", "tts", "guard", "embed", "vision", "allam", "distil")
+    chat = [i for i in ids if not any(b in i.lower() for b in bad)]
+    def rank(i):
+        s = i.lower()
+        return (("llama-3.3" in s) * 8 + ("70b" in s) * 4 +
+                ("instant" in s) * 3 + ("llama" in s) * 2 + ("gemma" in s))
+    return sorted(chat, key=rank, reverse=True)
+
 def sage_recommend(prob, band, contribs):
     prompt = _prompt(prob, band, contribs)
     key = _groq_key()
     if key:
-        model_pref = None
         try:
-            model_pref = st.secrets.get("GROQ_MODEL")
+            pref = st.secrets.get("GROQ_MODEL")
         except Exception:
-            pass
-        models = ([model_pref] if model_pref else []) + GROQ_MODELS
-        last_err = ""
+            pref = None
+        models = ([pref] if pref else []) + _live_groq_models(key)
+        last_err = "no chat models returned by Groq"
         for mdl in models:
             if not mdl:
                 continue
             try:
                 from groq import Groq
-                client = Groq(api_key=key)
-                resp = client.chat.completions.create(
+                resp = Groq(api_key=key).chat.completions.create(
                     model=mdl, temperature=0.3, max_tokens=70,
                     messages=[{"role": "user", "content": prompt}])
                 return resp.choices[0].message.content.strip(), f"LLM · Groq ({mdl})"
             except Exception as e:
-                last_err = str(e)[:120]
+                last_err = str(e)[:140]
                 continue
-        st.warning("Groq was reached but every model call failed. Last error: " + last_err)
+        st.warning("Groq key works but no model call succeeded. Last error: " + last_err)
     try:
         import ollama
         resp = ollama.chat(model=OLLAMA_MODEL, messages=[{"role": "user", "content": prompt}])
@@ -151,41 +152,36 @@ def sage_recommend(prob, band, contribs):
 def shap_figure(contribs):
     feats = [f for f, _ in contribs][::-1]
     vals = [v for _, v in contribs][::-1]
-    cols = [POS if v >= 0 else NEG for v in vals]
+    cols = [COLORS["pos"] if v >= 0 else COLORS["neg"] for v in vals]
     fig = go.Figure(go.Bar(x=vals, y=feats, orientation="h", marker_color=cols,
-                           text=[f"{v:+.2f}" for v in vals], textposition="outside",
-                           cliponaxis=False))
-    fig.update_layout(height=290, margin=dict(l=8, r=34, t=6, b=6),
-                      xaxis_title="effect on the score  ·  green pushes towards a purchase",
-                      plot_bgcolor="white", paper_bgcolor="white",
-                      font=dict(family="Inter", size=12, color=INK))
-    fig.update_xaxes(zeroline=True, zerolinecolor="#C9D0CB", gridcolor="#EEF1EE")
-    fig.update_yaxes(gridcolor="white")
+                           text=[f"{v:+.2f}" for v in vals], textposition="outside", cliponaxis=False))
+    fig.update_layout(height=300, margin=dict(l=10, r=34, t=10, b=10),
+                      xaxis_title="push on the score  (green = towards purchase)",
+                      plot_bgcolor="white", font=dict(size=13))
+    fig.add_vline(x=0, line_width=1, line_color="#999")
     return fig
 
 # ----------------------------------------------------------------- header
 st.markdown(f"""
-<div class="gs-head">
-  <div class="gs-mark">GS</div>
-  <div>
-    <div class="gs-name">GreenSight</div>
-    <div class="gs-sub">Predicting online purchase intention, explaining it, and recommending a sustainable action</div>
+<div class="gs-hero">
+  <h1>🌱 GreenSight</h1>
+  <p>Explainable, sustainability-aware prediction of online purchase intention</p>
+  <div style="margin-top:12px">
+    <span class="gs-step" style="background:{COLORS['green']}">1 · RISE — predict</span>
+    <span class="gs-step" style="background:{COLORS['blue']}">2 · SHINE — explain</span>
+    <span class="gs-step" style="background:{COLORS['amber']};color:#3a3326">3 · SAGE — recommend</span>
   </div>
 </div>
-<div class="gs-flow"><b>RISE</b> predicts &nbsp;→&nbsp; <b>SHINE</b> explains &nbsp;→&nbsp; <b>SAGE</b> recommends</div>
 """, unsafe_allow_html=True)
 
 if METRICS:
-    st.caption(f"Model: CatBoost · test accuracy {METRICS.get('accuracy','–')} · "
+    st.caption(f"Model: CatBoost  ·  test accuracy {METRICS.get('accuracy','–')}  ·  "
                f"test ROC AUC {METRICS.get('roc_auc','–')}")
 
 # ----------------------------------------------------------------- inputs
-st.write("")
-st.markdown("##### Choose a session")
-
+st.subheader("Choose a session")
 labels = ["— type my own —"] + [e["_label"] for e in EXAMPLES]
-sel = st.selectbox("Pick a real session from the dataset, then adjust the values if you like",
-                   labels, label_visibility="visible")
+sel = st.selectbox("Pick a real session from the dataset, then adjust the values if you like", labels)
 
 if sel != "— type my own —":
     p = next(e for e in EXAMPLES if e["_label"] == sel)
@@ -195,7 +191,6 @@ else:
               ProductRelated=20, BounceRates=0.02, PageValues=10.0))
 
 months = list(MONTH_MAP.keys())
-st.markdown("##### The six features")
 c1, c2, c3 = st.columns(3)
 with c1:
     page_values = st.number_input("PageValues", 0.0, 400.0, float(p["PageValues"]), 0.5,
@@ -214,7 +209,6 @@ with c3:
     traffic = st.number_input("TrafficType", 1, 20, int(p["TrafficType"]), 1,
                               help="How the visitor reached the site (coded 1–20).")
 
-st.write("")
 run = st.button("▶  Run GreenSight")
 
 # ----------------------------------------------------------------- run
@@ -228,24 +222,22 @@ if run:
     base, contribs = shine_explain(X)
     reco, source = sage_recommend(prob, band, contribs)
     carbon = BAND_N[band] * CARBON_PER_RETURN
-    band_color = {"HIGH": GREEN, "MEDIUM": AMBER, "LOW": NEG}[band]
+    band_color = {"HIGH": COLORS["green"], "MEDIUM": COLORS["amber"], "LOW": COLORS["neg"]}[band]
 
-    st.write("")
-    st.markdown("#### Result")
-    col1, col2, col3 = st.columns([1, 1.25, 1.25])
+    st.markdown("### Result")
+    col1, col2, col3 = st.columns([1, 1.3, 1.3])
 
     with col1:
         with st.container(border=True):
-            st.markdown(f'<div class="gs-mod" style="color:{GREEN}">RISE · prediction</div>', unsafe_allow_html=True)
+            st.markdown(f'<span class="gs-tag" style="color:{COLORS["green"]}">1 · RISE — prediction</span>', unsafe_allow_html=True)
             st.markdown('<div class="gs-h">Purchase intention</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="gs-prob">{prob*100:.1f}%</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="font-size:2.6rem;font-weight:800;color:{COLORS["dark"]}">{prob*100:.1f}%</div>', unsafe_allow_html=True)
             st.progress(min(max(prob, 0.0), 1.0))
-            st.markdown(f'<div style="margin-top:12px"><span class="gs-band" style="background:{band_color}">{band}</span></div>',
-                        unsafe_allow_html=True)
+            st.markdown(f'<div style="margin-top:10px"><span class="gs-band" style="background:{band_color}">{band}</span></div>', unsafe_allow_html=True)
 
     with col2:
         with st.container(border=True):
-            st.markdown(f'<div class="gs-mod" style="color:{BLUE}">SHINE · explanation</div>', unsafe_allow_html=True)
+            st.markdown(f'<span class="gs-tag" style="color:{COLORS["blue"]}">2 · SHINE — explanation</span>', unsafe_allow_html=True)
             st.markdown('<div class="gs-h">Why this score</div>', unsafe_allow_html=True)
             st.plotly_chart(shap_figure(contribs), use_container_width=True)
             tf, tv = contribs[0]
@@ -253,9 +245,10 @@ if run:
 
     with col3:
         with st.container(border=True):
-            st.markdown(f'<div class="gs-mod" style="color:{AMBER}">SAGE · recommendation</div>', unsafe_allow_html=True)
+            st.markdown(f'<span class="gs-tag" style="color:{COLORS["amber"]}">3 · SAGE — recommendation</span>', unsafe_allow_html=True)
             st.markdown('<div class="gs-h">Recommended action</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="gs-reco">{reco}</div>', unsafe_allow_html=True)
-            st.write("")
             st.metric("Estimated carbon saving (SDG 12)", f"{carbon:.1f} kg CO₂")
             st.caption(f"SAGE engine: {source}")
+
+    st.success("RISE → SHINE → SAGE completed. Each module fed the next.")
