@@ -1,6 +1,6 @@
 """
-GreenSight — Streamlit UI
-=========================
+Explainable Purchase Intention Prediction — Streamlit UI
+=======================================================
 Pick a real session from the dataset (or type your own), click Run, and
 RISE -> SHINE -> SAGE run in the backend, with the SDG 12 carbon saving.
 
@@ -27,7 +27,7 @@ BAND_N = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
 COLORS = {"dark": "#0E3B2E", "green": "#2E8B6B", "blue": "#1C7293",
           "amber": "#E0A93B", "pos": "#2E8B6B", "neg": "#C0564B"}
 
-st.set_page_config(page_title="GreenSight", page_icon="🌱", layout="wide")
+st.set_page_config(page_title="Explainable Purchase Intention Prediction", page_icon="📊", layout="wide")
 
 # ----------------------------------------------------------------- styling
 st.markdown(f"""
@@ -172,8 +172,8 @@ def shap_figure(contribs):
 # ----------------------------------------------------------------- header
 st.markdown(f"""
 <div class="gs-hero">
-  <h1>🌱 GreenSight</h1>
-  <p>Explainable, sustainability-aware prediction of online purchase intention</p>
+  <h1>Explainable Purchase Intention Prediction</h1>
+  <p>Predicting online shopper intent, explaining each prediction, and recommending a sustainability-aware action</p>
   <div style="margin-top:12px">
     <span class="gs-step" style="background:{COLORS['green']}">1 · RISE — predict</span>
     <span class="gs-step" style="background:{COLORS['blue']}">2 · SHINE — explain</span>
@@ -217,7 +217,7 @@ with c3:
     traffic = st.number_input("TrafficType", 1, 20, int(p["TrafficType"]), 1,
                               help="How the visitor reached the site (coded 1–20).")
 
-run = st.button("▶  Run GreenSight")
+run = st.button("▶  Run Prediction")
 
 # ----------------------------------------------------------------- run
 if run:
@@ -260,3 +260,23 @@ if run:
             st.caption(f"SAGE engine: {source}")
 
     st.success("RISE → SHINE → SAGE completed. Each module fed the next.")
+
+
+# ----------------------------------------------------------------- about the developer
+st.markdown("<hr style='margin-top:42px;border:none;border-top:1px solid #d9e0db;'>", unsafe_allow_html=True)
+st.markdown(f"""
+<div style="padding:10px 2px 30px 2px;">
+  <div style="font-size:.8rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:{COLORS['green']};margin-bottom:14px;">About the Developer</div>
+  <div style="margin-bottom:18px;">
+    <div style="font-size:1.12rem;font-weight:700;color:{COLORS['dark']};">Tushaal Gadiya</div>
+    <div style="color:#3a463f;font-size:.96rem;">B.Sc. Data Science and Mathematics</div>
+    <div style="color:#5B6B63;font-size:.9rem;">Christ University, Bengaluru, India</div>
+  </div>
+  <div>
+    <div style="font-size:.76rem;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#5B6B63;margin-bottom:3px;">Guided by</div>
+    <div style="font-size:1.06rem;font-weight:700;color:{COLORS['dark']};">Dr. Dalvin Vinoth Kumar A</div>
+    <div style="color:#3a463f;font-size:.96rem;">Assistant Professor, Department of Statistics and Data Science</div>
+    <div style="color:#5B6B63;font-size:.9rem;">Christ University, Bengaluru, India</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
